@@ -76,11 +76,16 @@ export class SimoonMeshClient {
       this.log('system', 'TRANSPORT', `Connection state changed: ${state}`);
 
       if (state === 'connected') {
-        // Initiator sends handshake
-        if (this.transport.peerId && this.identity.id.localeCompare(this.transport.peerId) > 0) {
-          this.log('out', 'CRYPTO', `Initiating E2EE handshake with ${this.transport.peerId}`);
-          const handshakeJson = await this.protocol.createHandshakeEnvelope(this.transport.peerId);
-          await this.transport.send(handshakeJson);
+        this.log('system', 'TRANSPORT', `DataChannel verified via SIMOON_MESH_TEST handshake!`);
+        // Establish E2EE keys
+        if (this.transport.peerId) {
+          this.log('out', 'CRYPTO', `Initiating E2EE cryptographic handshake with ${this.transport.peerId}`);
+          try {
+            const handshakeJson = await this.protocol.createHandshakeEnvelope(this.transport.peerId);
+            await this.transport.send(handshakeJson);
+          } catch (e: any) {
+            this.log('system', 'CRYPTO', `Handshake send error: ${e.message}`);
+          }
         }
       } else if (state === 'disconnected' || state === 'failed') {
         this.connectedPeer = null;
@@ -97,10 +102,13 @@ export class SimoonMeshClient {
       this.handleIncomingData(data);
     });
 
+    // Start background signaling listener so device can receive calls anytime
+    this.transport.startSignalingPoll();
+
     this.isInitialized = true;
     this.log('system', 'PROTOCOL', `SIMOON MESH node initialized: ${this.identity.id}`);
 
-    // Announce to local discovery server
+    // Announce presence on network
     this.announcePresence();
   }
 
@@ -322,6 +330,49 @@ export class SimoonMeshClient {
     const cleanId = remotePeerId.trim().toUpperCase();
     this.log('system', 'TRANSPORT', `Initiating WebRTC connection to peer ${cleanId}...`);
     await this.transport.connect(cleanId);
+  }
+
+  /**
+   * Create a 6-digit pairing session code (e.g. 482-195)
+   */
+  async createPairingSession(): Promise<string> {
+    const baseUrl = getSignalingUrl();
+    const res = await fetch(`${baseUrl}/api/signal/session/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hostPeerId: this.identity.id }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to create pairing session: HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    this.log('system', 'TRANSPORT', `Pairing session created: ${data.code}. Ready for peer connection.`);
+    return data.code;
+  }
+
+  /**
+   * Join an existing pairing session by 6-digit code
+   */
+  async joinPairingSession(code: string): Promise<string> {
+    const baseUrl = getSignalingUrl();
+    const res = await fetch(`${baseUrl}/api/signal/session/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, guestPeerId: this.identity.id }),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `Failed to join session: HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    this.log('system', 'TRANSPORT', `Joined session ${data.code}. Host is ${data.hostPeerId}. Initiating WebRTC...`);
+    // Connect directly to host
+    await this.connectToPeer(data.hostPeerId);
+    return data.hostPeerId;
   }
 
   /**

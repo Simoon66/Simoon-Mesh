@@ -21,8 +21,12 @@ export interface TransportStats {
   bufferedAmount: number;
   iceConnectionState?: string;
   iceGatheringState?: string;
+  peerConnectionState?: string;
   signalingState?: string;
+  signalingStatus?: string;
+  dataChannelState?: string;
   rttMs?: number;
+  lastError?: string | null;
   lastActiveTimestamp: number;
 }
 

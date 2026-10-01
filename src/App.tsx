@@ -109,15 +109,21 @@ export default function App() {
           }
         });
 
-        // Check if URL has ?peer=XXXX-XXXX-XXXX
+        // Check if URL has ?peer=XXXX or ?join=XXXX
         const urlParams = new URLSearchParams(window.location.search);
         const peerParam = urlParams.get('peer');
-        if (peerParam && peerParam !== simoonClient.identity.id) {
+        const joinParam = urlParams.get('join');
+
+        if (joinParam) {
           setActiveTab('connect');
-          // auto-trigger connection attempt if desired
+          setTimeout(() => {
+            simoonClient.joinPairingSession(joinParam).catch(console.error);
+          }, 800);
+        } else if (peerParam && peerParam !== simoonClient.identity.id) {
+          setActiveTab('connect');
           setTimeout(() => {
             simoonClient.connectToPeer(peerParam).catch(console.error);
-          }, 600);
+          }, 800);
         }
 
         setIsReady(true);
@@ -164,6 +170,14 @@ export default function App() {
 
   const handleAcceptAirgapAnswer = async (answerToken: string) => {
     await simoonClient.acceptAirgapAnswer(answerToken);
+  };
+
+  const handleCreatePairingSession = async () => {
+    return await simoonClient.createPairingSession();
+  };
+
+  const handleJoinPairingSession = async (code: string) => {
+    return await simoonClient.joinPairingSession(code);
   };
 
   const handleResetNode = async () => {
@@ -221,9 +235,12 @@ export default function App() {
             connectedPeer={connectedPeer}
             onConnect={handleConnectPeer}
             onDisconnect={handleDisconnectPeer}
+            onCreatePairingSession={handleCreatePairingSession}
+            onJoinPairingSession={handleJoinPairingSession}
             onCreateAirgapOffer={handleCreateAirgapOffer}
             onAcceptAirgapOffer={handleAcceptAirgapOffer}
             onAcceptAirgapAnswer={handleAcceptAirgapAnswer}
+            lastError={stats.lastError}
           />
         )}
 

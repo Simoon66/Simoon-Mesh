@@ -5,13 +5,14 @@ import {
   Copy,
   Check,
   Link,
-  Wifi,
   Radio,
-  ArrowRight,
-  ShieldCheck,
   Share2,
   RefreshCw,
   Terminal,
+  KeyRound,
+  AlertTriangle,
+  CheckCircle2,
+  Cpu,
 } from 'lucide-react';
 import { SimoonIdentity, TransportState } from '../types/index.ts';
 import { getSignalingUrl } from '../config.ts';
@@ -22,9 +23,12 @@ interface ConnectViewProps {
   connectedPeer: SimoonIdentity | null;
   onConnect: (peerId: string) => Promise<void>;
   onDisconnect: () => Promise<void>;
+  onCreatePairingSession: () => Promise<string>;
+  onJoinPairingSession: (code: string) => Promise<string>;
   onCreateAirgapOffer: () => Promise<string>;
   onAcceptAirgapOffer: (offerToken: string) => Promise<string>;
   onAcceptAirgapAnswer: (answerToken: string) => Promise<void>;
+  lastError?: string | null;
 }
 
 export const ConnectView: React.FC<ConnectViewProps> = ({
@@ -33,19 +37,27 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
   connectedPeer,
   onConnect,
   onDisconnect,
+  onCreatePairingSession,
+  onJoinPairingSession,
   onCreateAirgapOffer,
   onAcceptAirgapOffer,
   onAcceptAirgapAnswer,
+  lastError,
 }) => {
   const [peerInput, setPeerInput] = useState('');
+  const [sessionInput, setSessionInput] = useState('');
+  const [createdSessionCode, setCreatedSessionCode] = useState<string | null>(null);
+
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Discovered nearby peers on local network
   const [discoveredPeers, setDiscoveredPeers] = useState<{ peerId: string; lastSeen: number }[]>([]);
   const [isRefreshingPeers, setIsRefreshingPeers] = useState(false);
+  const [signalingAvailable, setSignalingAvailable] = useState<boolean | null>(null);
 
   // Airgap / Manual mode
   const [showAirgap, setShowAirgap] = useState(false);
@@ -56,14 +68,18 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Generate QR Code on mount or identity change
+  // Generate QR Code on mount or identity/session change
   useEffect(() => {
-    if (canvasRef.current && myIdentity.id) {
+    if (canvasRef.current) {
+      const qrValue = createdSessionCode
+        ? `${window.location.origin}/?join=${encodeURIComponent(createdSessionCode)}`
+        : `${window.location.origin}/?peer=${encodeURIComponent(myIdentity.id)}`;
+
       QRCode.toCanvas(
         canvasRef.current,
-        myIdentity.id,
+        qrValue,
         {
-          width: 180,
+          width: 170,
           margin: 1,
           color: {
             dark: '#000000',
@@ -75,9 +91,7 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
         }
       );
     }
-  }, [myIdentity.id]);
-
-  const [signalingAvailable, setSignalingAvailable] = useState<boolean | null>(null);
+  }, [myIdentity.id, createdSessionCode]);
 
   // Poll for nearby announced peers
   const fetchNearbyPeers = async () => {
@@ -113,10 +127,42 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
 
   const handleCopyLink = () => {
     const url = new URL(window.location.href);
-    url.searchParams.set('peer', myIdentity.id);
+    if (createdSessionCode) {
+      url.searchParams.set('join', createdSessionCode);
+    } else {
+      url.searchParams.set('peer', myIdentity.id);
+    }
     navigator.clipboard.writeText(url.toString());
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const handleCreateSession = async () => {
+    try {
+      setIsConnecting(true);
+      setErrorMessage(null);
+      const code = await onCreatePairingSession();
+      setCreatedSessionCode(code);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to create session code');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleJoinSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionInput.trim()) return;
+
+    try {
+      setIsConnecting(true);
+      setErrorMessage(null);
+      await onJoinPairingSession(sessionInput.trim());
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to join session');
+    } finally {
+      setIsConnecting(false);
+    }
   };
 
   const handleConnectSubmit = async (e: React.FormEvent) => {
@@ -177,66 +223,116 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
   };
 
   const isConnected = connectionState === 'connected';
+  const isConnectionAttemptActive = connectionState === 'connecting' || isConnecting;
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 space-y-8">
+    <div className="mx-auto max-w-4xl px-4 py-8 space-y-6">
       {/* Intro Hero */}
       <div className="space-y-1">
         <h2 className="font-display text-2xl font-bold tracking-tight text-neutral-100">
-          Peer-to-Peer Pairing
+          Device Pairing & Connection
         </h2>
         <p className="text-xs text-neutral-400">
-          Connect directly to any browser or device over WebRTC DataChannel. No phone number or cloud account required.
+          Establish direct browser-to-browser WebRTC DataChannels. Messages and files travel directly between peers.
         </p>
       </div>
 
-      {/* Active Connection Banner (if connected) */}
+      {/* Real Connected State Banner (ONLY shown when genuinely connected) */}
       {isConnected && connectedPeer && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-emerald-500/40 bg-emerald-950/20 p-4">
           <div className="flex items-center gap-3">
             <span className="flex h-3 w-3 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
             </span>
             <div>
-              <div className="text-xs font-mono font-semibold text-emerald-300">
-                Direct P2P Link Established
+              <div className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-wide">
+                CONNECTED (DataChannel Verified)
               </div>
-              <div className="text-sm font-mono text-neutral-200">
-                Connected with: <span className="font-bold text-neutral-100">{connectedPeer.id}</span>
+              <div className="text-sm font-mono text-neutral-100 mt-0.5">
+                Peer: <span className="font-bold text-amber-400">{connectedPeer.id}</span>
               </div>
             </div>
           </div>
           <button
             onClick={onDisconnect}
-            className="px-3.5 py-1.5 text-xs font-medium text-rose-300 bg-rose-950/40 hover:bg-rose-900/50 border border-rose-800/50 rounded transition-colors whitespace-nowrap self-start sm:self-auto"
+            className="px-3.5 py-1.5 text-xs font-semibold text-rose-300 bg-rose-950/50 hover:bg-rose-900/60 border border-rose-800/60 rounded transition-colors whitespace-nowrap self-start sm:self-auto"
           >
             Disconnect Peer
           </button>
         </div>
       )}
 
+      {/* Active Connecting Indicator Banner */}
+      {isConnectionAttemptActive && !isConnected && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-950/20 p-4 text-xs font-mono text-amber-300">
+          <RefreshCw className="h-4 w-4 animate-spin text-amber-400 shrink-0" />
+          <div className="space-y-0.5">
+            <span className="font-semibold block">Negotiating WebRTC Connection...</span>
+            <span className="text-[11px] text-amber-400/80">
+              Exchanging SDP offer/answer and gathering ICE candidates. Awaiting DataChannel verification handshake...
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Error Callout if connection failed */}
+      {(errorMessage || lastError) && !isConnected && (
+        <div className="rounded-lg border border-rose-500/50 bg-rose-950/30 p-3.5 text-xs">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <span className="font-semibold text-rose-300">Connection Failed:</span>
+              <p className="font-mono text-[11px] text-rose-200 leading-relaxed">
+                {errorMessage || lastError}
+              </p>
+              <p className="text-[10px] text-neutral-400 pt-1">
+                Tip: If on different restrictive Wi-Fi networks without TURN, try the Airgap & Zero-Server Manual Handshake below.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main 2-Column Pairing Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Left: My SIMOON ID Card */}
+        {/* Left Column: Device Identity & Session Creator */}
         <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6 flex flex-col items-center text-center space-y-4">
           <div className="space-y-1">
             <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400">
-              My Cryptographic SIMOON ID
+              My SIMOON ID
             </span>
             <div className="font-display text-2xl font-bold tracking-wider text-neutral-100 font-mono-nums">
               {myIdentity.id}
             </div>
           </div>
 
-          {/* QR Code Container */}
+          {/* Dynamic QR Code Canvas */}
           <div className="rounded-lg bg-white p-3 shadow-md">
             <canvas ref={canvasRef} className="block" />
           </div>
 
-          <p className="text-xs text-neutral-400 max-w-xs">
-            Derived locally from your ECDH and ECDSA keypair. Scan or share this ID with another device.
-          </p>
+          {/* Session Code Highlight (if created) */}
+          {createdSessionCode ? (
+            <div className="w-full rounded border border-amber-500/40 bg-amber-950/20 p-3 text-center space-y-1">
+              <span className="text-[10px] font-mono uppercase text-amber-400">Active Pairing Code</span>
+              <div className="text-xl font-bold font-mono text-neutral-100 tracking-widest">
+                {createdSessionCode}
+              </div>
+              <p className="text-[10px] text-neutral-400 font-mono">
+                Tell other device to enter this 6-digit code or scan the QR above.
+              </p>
+            </div>
+          ) : (
+            <button
+              onClick={handleCreateSession}
+              disabled={isConnectionAttemptActive}
+              className="w-full flex items-center justify-center gap-2 rounded-md bg-amber-500 hover:bg-amber-400 px-4 py-2 text-xs font-bold uppercase tracking-wider text-neutral-950 transition-colors disabled:opacity-50"
+            >
+              <KeyRound className="h-4 w-4" />
+              <span>Generate 6-Digit Session Code</span>
+            </button>
+          )}
 
           {/* Action buttons */}
           <div className="flex flex-wrap justify-center gap-2 w-full pt-1">
@@ -252,61 +348,64 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 transition-colors"
             >
               {copiedLink ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Link className="h-3.5 w-3.5" />}
-              <span>{copiedLink ? 'Copied Link' : 'Share Connect Link'}</span>
+              <span>{copiedLink ? 'Copied Link' : 'Copy Share Link'}</span>
             </button>
           </div>
         </div>
 
-        {/* Right: Connect to Remote Peer */}
+        {/* Right Column: Connect via Code or Peer ID */}
         <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6 flex flex-col justify-between space-y-6">
-          <div className="space-y-4">
-            <div className="space-y-1">
-              <span className="text-[11px] font-mono uppercase tracking-wider text-neutral-400">
-                Connect to a Peer
+          <div className="space-y-5">
+            {/* Option A: Enter 6-digit session code */}
+            <div className="space-y-2">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-semibold">
+                Method 1: Enter 6-Digit Code
               </span>
-              <h3 className="font-display text-lg font-semibold text-neutral-100">
-                Enter Remote SIMOON ID
-              </h3>
-            </div>
-
-            <form onSubmit={handleConnectSubmit} className="space-y-3">
-              <div>
+              <form onSubmit={handleJoinSession} className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="e.g. 8F4A-29C1-7D52"
-                  value={peerInput}
-                  onChange={(e) => setPeerInput(e.target.value.toUpperCase())}
-                  className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3.5 py-2.5 font-mono text-sm uppercase text-neutral-100 placeholder-neutral-500 focus:border-amber-400 focus:outline-none"
+                  placeholder="e.g. 482-195"
+                  value={sessionInput}
+                  onChange={(e) => setSessionInput(e.target.value)}
+                  className="flex-1 rounded-md border border-neutral-700 bg-neutral-950 px-3.5 py-2 font-mono text-sm tracking-wider uppercase text-neutral-100 placeholder-neutral-500 focus:border-amber-400 focus:outline-none"
                 />
-              </div>
+                <button
+                  type="submit"
+                  disabled={isConnectionAttemptActive || !sessionInput.trim()}
+                  className="rounded-md bg-amber-500 hover:bg-amber-400 px-4 py-2 text-xs font-bold uppercase tracking-wider text-neutral-950 disabled:opacity-50 transition-colors whitespace-nowrap"
+                >
+                  Join Code
+                </button>
+              </form>
+            </div>
 
-              {errorMessage && (
-                <div className="text-xs text-rose-400 font-mono">
-                  {errorMessage}
+            {/* Option B: Enter direct SIMOON ID */}
+            <div className="space-y-2 border-t border-neutral-800/80 pt-4">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-neutral-400 font-semibold">
+                Method 2: Connect by SIMOON ID
+              </span>
+              <form onSubmit={handleConnectSubmit} className="space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. 8F4A-29C1-7D52"
+                    value={peerInput}
+                    onChange={(e) => setPeerInput(e.target.value.toUpperCase())}
+                    className="flex-1 rounded-md border border-neutral-700 bg-neutral-950 px-3.5 py-2 font-mono text-sm uppercase text-neutral-100 placeholder-neutral-500 focus:border-amber-400 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isConnectionAttemptActive || !peerInput.trim()}
+                    className="rounded-md bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 px-4 py-2 text-xs font-medium text-neutral-100 disabled:opacity-50 transition-colors whitespace-nowrap"
+                  >
+                    Connect ID
+                  </button>
                 </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={isConnecting || !peerInput.trim()}
-                className="w-full flex items-center justify-center gap-2 rounded-md bg-amber-500 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-neutral-950 hover:bg-amber-400 disabled:opacity-50 transition-colors"
-              >
-                {isConnecting ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 animate-spin" />
-                    <span>Establishing P2P Handshake...</span>
-                  </>
-                ) : (
-                  <>
-                    <Radio className="h-4 w-4" />
-                    <span>Connect P2P Channel</span>
-                  </>
-                )}
-              </button>
-            </form>
+              </form>
+            </div>
           </div>
 
-          {/* Discovered nearby nodes on local network / multi-tab */}
+          {/* Active Nodes on Network / Multi-Tab Discovery */}
           <div className="border-t border-neutral-800 pt-4 space-y-2">
             <div className="flex items-center justify-between text-xs text-neutral-400">
               <span className="font-mono text-[11px] uppercase">
@@ -315,7 +414,7 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
               <button
                 onClick={fetchNearbyPeers}
                 className="hover:text-neutral-200 transition-colors"
-                title="Refresh nearby nodes"
+                title="Refresh network nodes"
               >
                 <RefreshCw className={`h-3 w-3 ${isRefreshingPeers ? 'animate-spin' : ''}`} />
               </button>
@@ -324,8 +423,8 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
             {discoveredPeers.length === 0 ? (
               <p className="text-xs text-neutral-500 italic">
                 {signalingAvailable === false
-                  ? 'Static deployment: Centralized signaling relay not detected. Connect using Airgap / QR mode below or configure VITE_SIGNALING_URL.'
-                  : 'Open this app in a second browser window or another device to discover peers automatically.'}
+                  ? 'Signaling relay offline or static host mode. Use Airgap Mode below or set VITE_SIGNALING_URL.'
+                  : 'Open SIMOON MESH in another tab or device on same network to discover peers automatically.'}
               </p>
             ) : (
               <div className="space-y-1.5 max-h-36 overflow-y-auto">
@@ -343,7 +442,8 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
                         setPeerInput(peer.peerId);
                         onConnect(peer.peerId);
                       }}
-                      className="text-xs text-amber-400 hover:text-amber-300 font-semibold"
+                      disabled={isConnectionAttemptActive}
+                      className="text-xs text-amber-400 hover:text-amber-300 font-semibold disabled:opacity-40"
                     >
                       Connect →
                     </button>
@@ -362,10 +462,10 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
             <Terminal className="h-4 w-4 text-cyan-400" />
             <div>
               <h4 className="text-xs font-semibold text-neutral-200">
-                Airgap & Zero-Server Manual Handshake (Fallback)
+                Airgap & Zero-Server Manual Handshake (Offline Fallback)
               </h4>
               <p className="text-[11px] text-neutral-400">
-                Connect two devices even if signaling servers are blocked or completely disabled by exchanging SDP tokens manually.
+                Connect two devices directly even without internet or signaling server by exchanging SDP tokens manually.
               </p>
             </div>
           </div>
@@ -404,10 +504,10 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
             {/* Generated token display */}
             {(airgapStep === 'created_offer' || airgapStep === 'created_answer') && (
               <div className="space-y-2">
-                <div className="text-amber-400">
+                <div className="text-amber-400 font-semibold">
                   {airgapStep === 'created_offer'
-                    ? 'Generated SDP Offer Token. Send this to Device B:'
-                    : 'Generated SDP Answer Token. Send this back to Device A:'}
+                    ? 'Generated SDP Offer Token. Send this token to Device B:'
+                    : 'Generated SDP Answer Token. Send this token back to Device A:'}
                 </div>
                 <textarea
                   readOnly

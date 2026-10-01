@@ -10,7 +10,7 @@ interface SignalingMessage {
   id: string;
   senderId: string;
   targetId: string;
-  type: 'offer' | 'answer' | 'candidate';
+  type: 'offer' | 'answer' | 'candidate' | 'session_joined';
   payload: any;
   timestamp: number;
 }
@@ -19,6 +19,13 @@ interface PeerInfo {
   peerId: string;
   lastSeen: number;
   label?: string;
+}
+
+interface PairingSession {
+  code: string;
+  hostPeerId: string;
+  guestPeerId: string | null;
+  createdAt: number;
 }
 
 async function startServer() {
@@ -30,8 +37,9 @@ async function startServer() {
   // In-memory ephemeral signaling state (ONLY for WebRTC handshakes; zero chat/file data)
   const peerSignalingQueues = new Map<string, SignalingMessage[]>();
   const activePeers = new Map<string, PeerInfo>();
+  const pairingSessions = new Map<string, PairingSession>();
 
-  // Housekeeping interval to clean stale peers and messages
+  // Housekeeping interval to clean stale peers, messages, and pairing sessions
   setInterval(() => {
     const now = Date.now();
     // Clean stale signaling messages older than 60s
@@ -49,9 +57,25 @@ async function startServer() {
         activePeers.delete(peerId);
       }
     }
+    // Clean pairing sessions older than 10 minutes
+    for (const [code, session] of pairingSessions.entries()) {
+      if (now - session.createdAt > 10 * 60 * 1000) {
+        pairingSessions.delete(code);
+      }
+    }
   }, 10000);
 
-  // Announce peer presence (for local network discovery / testing)
+  // Health check endpoint
+  app.get('/api/signal/health', (_req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      activePeers: activePeers.size,
+      activeSessions: pairingSessions.size,
+      timestamp: Date.now(),
+    });
+  });
+
+  // Announce peer presence
   app.post('/api/signal/announce', (req: Request, res: Response) => {
     const { peerId, label } = req.body;
     if (!peerId || typeof peerId !== 'string') {
@@ -61,7 +85,7 @@ async function startServer() {
     activePeers.set(peerId, {
       peerId,
       lastSeen: Date.now(),
-      label: label ? String(label).slice(0, 32) : undefined
+      label: label ? String(label).slice(0, 32) : undefined,
     });
     res.json({ success: true, registeredPeersCount: activePeers.size });
   });
@@ -81,6 +105,69 @@ async function startServer() {
     res.json({ peers });
   });
 
+  // Create a 6-digit pairing session code (e.g. 482-195)
+  app.post('/api/signal/session/create', (req: Request, res: Response) => {
+    const { hostPeerId } = req.body;
+    if (!hostPeerId || typeof hostPeerId !== 'string') {
+      res.status(400).json({ error: 'Missing hostPeerId' });
+      return;
+    }
+
+    // Generate random 6-digit formatted code
+    const raw = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = `${raw.slice(0, 3)}-${raw.slice(3, 6)}`;
+
+    const session: PairingSession = {
+      code,
+      hostPeerId,
+      guestPeerId: null,
+      createdAt: Date.now(),
+    };
+
+    pairingSessions.set(code, session);
+    res.json({ success: true, code, hostPeerId });
+  });
+
+  // Join a pairing session using 6-digit code
+  app.post('/api/signal/session/join', (req: Request, res: Response) => {
+    const { code, guestPeerId } = req.body;
+    if (!code || !guestPeerId) {
+      res.status(400).json({ error: 'Missing code or guestPeerId' });
+      return;
+    }
+
+    const cleanCode = String(code).trim().replace(/\s+/g, '');
+    const formatted = cleanCode.includes('-') ? cleanCode : `${cleanCode.slice(0, 3)}-${cleanCode.slice(3, 6)}`;
+    const session = pairingSessions.get(formatted);
+
+    if (!session) {
+      res.status(404).json({ error: 'Session code not found or expired' });
+      return;
+    }
+
+    session.guestPeerId = guestPeerId;
+
+    // Send a signaling message to the host notifying them of the guest
+    if (!peerSignalingQueues.has(session.hostPeerId)) {
+      peerSignalingQueues.set(session.hostPeerId, []);
+    }
+    peerSignalingQueues.get(session.hostPeerId)!.push({
+      id: Math.random().toString(36).substring(2, 9),
+      senderId: guestPeerId,
+      targetId: session.hostPeerId,
+      type: 'session_joined',
+      payload: { code: session.code, guestPeerId },
+      timestamp: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      code: session.code,
+      hostPeerId: session.hostPeerId,
+      guestPeerId,
+    });
+  });
+
   // Send signaling message (offer, answer, or ice-candidate)
   app.post('/api/signal/send', (req: Request, res: Response) => {
     const { senderId, targetId, type, payload } = req.body;
@@ -90,10 +177,9 @@ async function startServer() {
       return;
     }
 
-    // Refresh sender active state
     activePeers.set(senderId, {
       peerId: senderId,
-      lastSeen: Date.now()
+      lastSeen: Date.now(),
     });
 
     const msg: SignalingMessage = {
@@ -102,7 +188,7 @@ async function startServer() {
       targetId,
       type,
       payload,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
 
     if (!peerSignalingQueues.has(targetId)) {
@@ -122,7 +208,6 @@ async function startServer() {
       return;
     }
 
-    // Heartbeat
     if (activePeers.has(peerId)) {
       const peer = activePeers.get(peerId)!;
       peer.lastSeen = Date.now();
@@ -131,7 +216,6 @@ async function startServer() {
     }
 
     const messages = peerSignalingQueues.get(peerId) || [];
-    // Clear delivered messages
     peerSignalingQueues.delete(peerId);
 
     res.json({ messages });

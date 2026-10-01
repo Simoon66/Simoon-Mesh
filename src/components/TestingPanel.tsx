@@ -6,9 +6,11 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   Cpu,
-  RefreshCw,
   Trash2,
   CheckCircle,
+  AlertTriangle,
+  Server,
+  Activity,
 } from 'lucide-react';
 import { TransportStats, TransportState, ProtocolLogEntry, SimoonIdentity } from '../types/index.ts';
 import { formatBytes } from './FileTransferCard.tsx';
@@ -40,6 +42,8 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
 
   const filteredLogs = filter === 'ALL' ? logs : logs.filter(l => l.category === filter);
 
+  const isSignalingOk = stats.signalingStatus?.includes('Connected') || stats.signalingStatus?.includes('200');
+
   return (
     <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-neutral-800 bg-neutral-950/98 shadow-2xl backdrop-blur-xl">
       {/* Header */}
@@ -47,7 +51,7 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
         <div className="flex items-center gap-2">
           <Cpu className="h-4 w-4 text-amber-400" />
           <h3 className="font-display text-sm font-semibold tracking-wide text-neutral-100">
-            Protocol & Transport Diagnostics
+            Developer Diagnostics & Telemetry
           </h3>
         </div>
         <button
@@ -58,63 +62,107 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-5">
-        {/* Core State Grid */}
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded border border-neutral-800/80 bg-neutral-900/60 p-2.5">
-            <span className="text-[10px] font-mono uppercase text-neutral-400">Connection State</span>
-            <div className="mt-1 flex items-center gap-1.5 font-mono font-medium">
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  connectionState === 'connected'
-                    ? 'bg-emerald-400'
-                    : connectionState === 'connecting'
-                    ? 'bg-amber-400 animate-pulse'
-                    : 'bg-neutral-500'
-                }`}
-              />
-              <span className="text-neutral-200 capitalize">{connectionState}</span>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Error Callout if Last Error is present */}
+        {stats.lastError && (
+          <div className="rounded-lg border border-rose-500/50 bg-rose-950/30 p-3 text-xs">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-semibold text-rose-300">Underlying Diagnostic Error:</span>
+                <p className="font-mono text-[11px] text-rose-200 leading-relaxed break-words">
+                  {stats.lastError}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Section 5 Required Diagnostics Grid */}
+        <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3 space-y-2 text-xs font-mono">
+          <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2">
+            <span className="text-[11px] font-semibold text-neutral-200 flex items-center gap-1.5">
+              <Activity className="h-3.5 w-3.5 text-amber-400" />
+              WebRTC Connection Matrix
+            </span>
+            <span className="text-[10px] text-neutral-400">
+              Transport: <strong className="text-neutral-200">WebRTC DataChannel</strong>
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">My SIMOON ID</span>
+              <span className="font-bold text-amber-400">{myIdentity.id}</span>
+            </div>
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">Peer ID</span>
+              <span className="font-bold text-neutral-200">
+                {connectedPeer ? connectedPeer.id : stats.lastError ? 'Failed' : 'None connected'}
+              </span>
+            </div>
+
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">Signaling Status</span>
+              <span className={`flex items-center gap-1 font-semibold ${isSignalingOk ? 'text-emerald-400' : 'text-amber-400'}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${isSignalingOk ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                {stats.signalingStatus || 'Idle'}
+              </span>
+            </div>
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">Signaling State</span>
+              <span className="text-neutral-300">{stats.signalingState || 'stable'}</span>
+            </div>
+
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">ICE Gathering</span>
+              <span className="text-neutral-300 capitalize">{stats.iceGatheringState || 'new'}</span>
+            </div>
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">ICE Connection</span>
+              <span className={`capitalize ${stats.iceConnectionState === 'connected' || stats.iceConnectionState === 'completed' ? 'text-emerald-400 font-bold' : stats.iceConnectionState === 'failed' ? 'text-rose-400 font-bold' : 'text-neutral-300'}`}>
+                {stats.iceConnectionState || 'new'}
+              </span>
+            </div>
+
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">Peer Connection</span>
+              <span className={`capitalize ${stats.peerConnectionState === 'connected' ? 'text-emerald-400 font-bold' : stats.peerConnectionState === 'failed' ? 'text-rose-400 font-bold' : 'text-neutral-300'}`}>
+                {stats.peerConnectionState || 'new'}
+              </span>
+            </div>
+            <div>
+              <span className="text-neutral-500 block text-[10px] uppercase">DataChannel State</span>
+              <span className={`capitalize ${stats.dataChannelState === 'open' ? 'text-emerald-400 font-bold' : 'text-amber-400'}`}>
+                {stats.dataChannelState || 'closed'}
+              </span>
             </div>
           </div>
 
-          <div className="rounded border border-neutral-800/80 bg-neutral-900/60 p-2.5">
-            <span className="text-[10px] font-mono uppercase text-neutral-400">Transport Layer</span>
-            <div className="mt-1 font-mono font-medium text-neutral-200 truncate">
-              WebRTC DataChannel
+          {stats.rttMs !== undefined && (
+            <div className="border-t border-neutral-800/80 pt-2 flex justify-between text-[11px]">
+              <span className="text-neutral-500">DataChannel Verified RTT:</span>
+              <span className="text-emerald-400 font-bold">{stats.rttMs} ms</span>
             </div>
-          </div>
-
-          <div className="rounded border border-neutral-800/80 bg-neutral-900/60 p-2.5">
-            <span className="text-[10px] font-mono uppercase text-neutral-400">ICE Conn State</span>
-            <div className="mt-1 font-mono text-neutral-300">
-              {stats.iceConnectionState || 'new / disconnected'}
-            </div>
-          </div>
-
-          <div className="rounded border border-neutral-800/80 bg-neutral-900/60 p-2.5">
-            <span className="text-[10px] font-mono uppercase text-neutral-400">ICE Gathering</span>
-            <div className="mt-1 font-mono text-neutral-300">
-              {stats.iceGatheringState || 'new'}
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Cryptographic Session Telemetry */}
-        <div className="rounded border border-neutral-800 bg-neutral-900/70 p-3 text-xs space-y-2">
+        {/* Cryptographic Session Details */}
+        <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3 text-xs space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-neutral-300 flex items-center gap-1.5">
               <Lock className="h-3.5 w-3.5 text-amber-400" />
-              E2EE Cryptographic Suite
+              Cryptographic Suite
             </span>
             <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
-              <CheckCircle className="h-3 w-3" /> Standard Web Crypto
+              <CheckCircle className="h-3 w-3" /> ECDH + AES-GCM 256
             </span>
           </div>
 
-          <div className="font-mono text-[11px] text-neutral-400 space-y-1 pt-1 border-t border-neutral-800">
+          <div className="font-mono text-[10px] text-neutral-400 space-y-1 pt-1 border-t border-neutral-800">
             <div className="flex justify-between">
               <span>Key Agreement:</span>
-              <span className="text-neutral-200">ECDH (NIST P-256)</span>
+              <span className="text-neutral-200">ECDH (P-256)</span>
             </div>
             <div className="flex justify-between">
               <span>Key Derivation:</span>
@@ -124,30 +172,15 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
               <span>Symmetric Cipher:</span>
               <span className="text-neutral-200">AES-GCM (256-bit, 96-bit IV)</span>
             </div>
-            <div className="flex justify-between">
-              <span>Identity Signatures:</span>
-              <span className="text-neutral-200">ECDSA (P-256, SHA-256)</span>
-            </div>
-          </div>
-
-          <div className="pt-2 border-t border-neutral-800 font-mono text-[10px]">
-            <div className="text-neutral-400">Local Node Fingerprint:</div>
-            <div className="text-neutral-300 truncate">{myIdentity.fingerprint}</div>
-            {connectedPeer && (
-              <>
-                <div className="mt-1 text-neutral-400">Peer Fingerprint:</div>
-                <div className="text-neutral-300 truncate">{connectedPeer.fingerprint}</div>
-              </>
-            )}
           </div>
         </div>
 
-        {/* Real-time Throughput & Buffer Flow Control */}
-        <div className="rounded border border-neutral-800 bg-neutral-900/70 p-3 text-xs space-y-3">
+        {/* Real-time Throughput & Buffer */}
+        <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3 text-xs space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-neutral-300 flex items-center gap-1.5">
               <Radio className="h-3.5 w-3.5 text-cyan-400" />
-              Throughput & Low-Level Buffer
+              DataChannel Throughput & Buffer
             </span>
             <span className="text-[11px] font-mono text-cyan-400">
               {formatBytes(stats.currentRateBytesPerSec)}/s
@@ -157,12 +190,12 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
           <div className="grid grid-cols-2 gap-2 text-neutral-300 font-mono text-[11px]">
             <div className="flex items-center gap-1.5">
               <ArrowUpRight className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-              <span>Out: {formatBytes(stats.bytesSent)}</span>
+              <span>Sent: {formatBytes(stats.bytesSent)}</span>
               <span className="text-[10px] text-neutral-500">({stats.packetsSent} pkts)</span>
             </div>
             <div className="flex items-center gap-1.5">
               <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-              <span>In: {formatBytes(stats.bytesReceived)}</span>
+              <span>Recv: {formatBytes(stats.bytesReceived)}</span>
               <span className="text-[10px] text-neutral-500">({stats.packetsReceived} pkts)</span>
             </div>
           </div>
@@ -170,7 +203,7 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
           {/* DataChannel bufferedAmount gauge */}
           <div>
             <div className="flex justify-between text-[10px] font-mono text-neutral-400 mb-1">
-              <span>DataChannel Queue Buffer</span>
+              <span>Buffer Backpressure</span>
               <span className={stats.bufferedAmount > 128 * 1024 ? 'text-amber-400' : 'text-neutral-300'}>
                 {formatBytes(stats.bufferedAmount)} / 256 KB max
               </span>
@@ -190,20 +223,17 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-neutral-300">Protocol Envelope Traffic</span>
-            <div className="flex items-center gap-1">
-              {onClearLogs && (
-                <button
-                  onClick={onClearLogs}
-                  title="Clear event logs"
-                  className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
+            {onClearLogs && (
+              <button
+                onClick={onClearLogs}
+                title="Clear event logs"
+                className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
 
-          {/* Filter tabs */}
           <div className="flex gap-1 p-0.5 bg-neutral-900 rounded border border-neutral-800 text-[10px] font-mono">
             {(['ALL', 'TRANSPORT', 'CRYPTO', 'PROTOCOL', 'FILE'] as const).map(cat => (
               <button
@@ -218,8 +248,7 @@ export const TestingPanel: React.FC<TestingPanelProps> = ({
             ))}
           </div>
 
-          {/* Log feed */}
-          <div className="h-60 overflow-y-auto rounded border border-neutral-800 bg-neutral-950 p-2 font-mono text-[10px] space-y-1.5">
+          <div className="h-56 overflow-y-auto rounded border border-neutral-800 bg-neutral-950 p-2 font-mono text-[10px] space-y-1.5">
             {filteredLogs.length === 0 ? (
               <div className="p-4 text-center text-neutral-500">No protocol events recorded</div>
             ) : (
