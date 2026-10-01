@@ -14,6 +14,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import { SimoonIdentity, TransportState } from '../types/index.ts';
+import { getSignalingUrl } from '../config.ts';
 
 interface ConnectViewProps {
   myIdentity: SimoonIdentity;
@@ -76,17 +77,23 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
     }
   }, [myIdentity.id]);
 
+  const [signalingAvailable, setSignalingAvailable] = useState<boolean | null>(null);
+
   // Poll for nearby announced peers
   const fetchNearbyPeers = async () => {
     try {
       setIsRefreshingPeers(true);
-      const res = await fetch(`/api/signal/peers?exclude=${encodeURIComponent(myIdentity.id)}`);
+      const baseUrl = getSignalingUrl();
+      const res = await fetch(`${baseUrl}/api/signal/peers?exclude=${encodeURIComponent(myIdentity.id)}`);
       if (res.ok) {
         const data = await res.json();
         setDiscoveredPeers(data.peers || []);
+        setSignalingAvailable(true);
+      } else {
+        setSignalingAvailable(false);
       }
     } catch (e) {
-      // Offline or network error
+      setSignalingAvailable(false);
     } finally {
       setIsRefreshingPeers(false);
     }
@@ -316,7 +323,9 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
 
             {discoveredPeers.length === 0 ? (
               <p className="text-xs text-neutral-500 italic">
-                Open this app in a second browser window or another device to discover peers automatically.
+                {signalingAvailable === false
+                  ? 'Static deployment: Centralized signaling relay not detected. Connect using Airgap / QR mode below or configure VITE_SIGNALING_URL.'
+                  : 'Open this app in a second browser window or another device to discover peers automatically.'}
               </p>
             ) : (
               <div className="space-y-1.5 max-h-36 overflow-y-auto">

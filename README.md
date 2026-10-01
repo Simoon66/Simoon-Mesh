@@ -189,6 +189,49 @@ If you wish to test with **zero signaling server communication**:
 
 ---
 
+## Cloudflare Pages Deployment
+
+SIMOON MESH deploys as a static Single Page Application (SPA) on Cloudflare Pages.
+
+### Recommended Build Configuration
+
+In your Cloudflare Pages project dashboard:
+
+| Setting | Value |
+| :--- | :--- |
+| **Framework preset** | `Vite` |
+| **Build command** | `npm run build` |
+| **Build output directory** | `dist` |
+| **Root directory** | `/` |
+| **Environment Variable** | `NODE_VERSION` = `22` |
+
+### Package Manager & Lockfile Notice
+
+- **Package manager**: Standard `npm`
+- **Lockfile**: `package-lock.json`
+- The incompatible legacy `bun.lock` has been removed from the repository. Cloudflare Pages will install dependencies using `npm install` and build using `npm run build`.
+
+### SPA Routing Fallback
+
+Cloudflare Pages routing is pre-configured via `public/_redirects`:
+```text
+/*    /index.html   200
+```
+This ensures direct URL navigation (including shareable direct-connect links like `/?peer=8F4A-29C1-7D52`) resolves to `index.html` without 404 errors.
+
+### WebRTC & Signaling in Production
+
+Cloudflare Pages only hosts the frontend client. The WebRTC connection and cryptographic operations execute entirely within the client's browser.
+
+1. **Airgap Mode (Out of the Box)**: Requires zero backend servers. Users exchange connection tokens via QR code or text.
+2. **Automated Signaling (Optional)**: If you host a signaling relay (such as `server.ts` or a WebSocket relay), set:
+   ```text
+   VITE_SIGNALING_URL=https://signal.yourdomain.com
+   ```
+   If unset, the app operates gracefully without crashing, offering direct peer pairing and manual airgap exchange.
+
+---
+
 ## Roadmap
 
 - [x] **v0.1 — Web P2P Prototype & Protocol Foundation**

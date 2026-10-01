@@ -1,5 +1,6 @@
 import { ITransport } from './Transport.ts';
 import { TransportState, TransportType, TransportStats } from '../../types/index.ts';
+import { getSignalingUrl } from '../../config.ts';
 
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
@@ -306,7 +307,8 @@ export class WebRTCTransport implements ITransport {
 
   private async postSignal(targetId: string, type: string, payload: any) {
     try {
-      await fetch('/api/signal/send', {
+      const baseUrl = getSignalingUrl();
+      const res = await fetch(`${baseUrl}/api/signal/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -316,34 +318,44 @@ export class WebRTCTransport implements ITransport {
           payload,
         }),
       });
+      if (!res.ok) {
+        console.warn(`Signaling endpoint returned HTTP ${res.status}`);
+      }
     } catch (e) {
-      console.warn('Failed to send signaling message:', e);
+      console.warn('Signaling unavailable or network offline:', e);
     }
   }
 
   public startSignalingPoll() {
     if (this.pollingActive) return;
     this.pollingActive = true;
+    let consecutiveErrors = 0;
 
     const poll = async () => {
       if (!this.pollingActive) return;
 
       try {
-        const res = await fetch(`/api/signal/poll/${encodeURIComponent(this.localPeerId)}`);
+        const baseUrl = getSignalingUrl();
+        const res = await fetch(`${baseUrl}/api/signal/poll/${encodeURIComponent(this.localPeerId)}`);
         if (res.ok) {
+          consecutiveErrors = 0;
           const data = await res.json();
           if (Array.isArray(data.messages)) {
             for (const msg of data.messages) {
               await this.handleSignalingMessage(msg);
             }
           }
+        } else {
+          consecutiveErrors++;
         }
       } catch (e) {
-        // Transient network error or idle
+        consecutiveErrors++;
       }
 
       if (this.pollingActive) {
-        this.pollTimer = setTimeout(poll, 1200);
+        // If consecutive errors (e.g. static Cloudflare Pages with no backend signaling configured), backoff interval
+        const interval = consecutiveErrors > 3 ? 10000 : 1200;
+        this.pollTimer = setTimeout(poll, interval);
       }
     };
 

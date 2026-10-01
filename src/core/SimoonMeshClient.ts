@@ -4,6 +4,7 @@ import { WebRTCTransport } from './transport/WebRTCTransport.ts';
 import { ProtocolEngine, ProtocolEnvelope } from './messaging/protocol.ts';
 import { FileTransferManager } from './files/fileTransfer.ts';
 import { localDB } from './storage/db.ts';
+import { getSignalingUrl } from '../config.ts';
 
 export type SimoonMeshEvent =
   | { type: 'STATE_CHANGED'; state: TransportState }
@@ -119,7 +120,8 @@ export class SimoonMeshClient {
 
   private async announcePresence() {
     try {
-      await fetch('/api/signal/announce', {
+      const baseUrl = getSignalingUrl();
+      await fetch(`${baseUrl}/api/signal/announce`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ peerId: this.identity.id }),
