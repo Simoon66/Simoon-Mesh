@@ -18,12 +18,14 @@ import { ConnectView } from './components/ConnectView.tsx';
 import { FilesView } from './components/FilesView.tsx';
 import { SecurityView } from './components/SecurityView.tsx';
 import { TestingPanel } from './components/TestingPanel.tsx';
+import { ContactsModal } from './components/ContactsModal.tsx';
 import { RefreshCw } from 'lucide-react';
 
 export default function App() {
   const [isReady, setIsReady] = useState(false);
   const [activeTab, setActiveTab] = useState<'chat' | 'connect' | 'files' | 'security'>('chat');
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showContactsModal, setShowContactsModal] = useState(false);
 
   // Client states
   const [myIdentity, setMyIdentity] = useState<SimoonIdentity | null>(null);
@@ -87,6 +89,16 @@ export default function App() {
               }
               return [...prev, event.message];
             });
+          } else if (event.type === 'MESSAGE_EDITED') {
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === event.messageId
+                  ? { ...m, text: event.newText, isEdited: true, editedAt: event.editedAt }
+                  : m
+              )
+            );
+          } else if (event.type === 'MESSAGE_UNSENT') {
+            setMessages(prev => prev.filter(m => m.id !== event.messageId));
           } else if (event.type === 'TRANSFER_UPDATED') {
             setTransfers(prev => {
               const updated = new Map(prev);
@@ -142,6 +154,27 @@ export default function App() {
   // Handlers
   const handleSendMessage = async (text: string) => {
     await simoonClient.sendMessage(text);
+  };
+
+  const handleEditMessage = async (messageId: string, newText: string) => {
+    setMessages(prev =>
+      prev.map(m =>
+        m.id === messageId
+          ? { ...m, text: newText, isEdited: true, editedAt: Date.now() }
+          : m
+      )
+    );
+    await simoonClient.editText(messageId, newText);
+  };
+
+  const handleUnsendMessage = async (messageId: string) => {
+    setMessages(prev => prev.filter(m => m.id !== messageId));
+    await simoonClient.unsendMessage(messageId);
+  };
+
+  const handleClearChat = async () => {
+    setMessages([]);
+    await localDB.clearMessages();
   };
 
   const handleSendFile = async (file: File) => {
@@ -211,6 +244,7 @@ export default function App() {
         connectedPeerId={connectedPeer ? connectedPeer.id : null}
         showDiagnostics={showDiagnostics}
         onToggleDiagnostics={() => setShowDiagnostics(prev => !prev)}
+        onOpenContacts={() => setShowContactsModal(true)}
         myId={myIdentity.id}
       />
 
@@ -222,9 +256,13 @@ export default function App() {
             connectedPeer={connectedPeer}
             connectionState={connectionState}
             onSendMessage={handleSendMessage}
+            onEditMessage={handleEditMessage}
+            onUnsendMessage={handleUnsendMessage}
             onSendFile={handleSendFile}
             onCancelTransfer={handleCancelTransfer}
             onNavigateToConnect={() => setActiveTab('connect')}
+            onOpenContacts={() => setShowContactsModal(true)}
+            onClearChat={handleClearChat}
           />
         )}
 
@@ -269,6 +307,17 @@ export default function App() {
         logs={logs}
         myIdentity={myIdentity}
         onClearLogs={() => setLogs([])}
+      />
+
+      {/* Saved Contacts & Address Book Modal */}
+      <ContactsModal
+        isOpen={showContactsModal}
+        onClose={() => setShowContactsModal(false)}
+        onSelectPeerToConnect={(peerId) => {
+          simoonClient.connectToPeer(peerId);
+          setActiveTab('connect');
+        }}
+        connectedPeerId={connectedPeer ? connectedPeer.id : null}
       />
     </div>
   );

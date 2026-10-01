@@ -61,6 +61,8 @@ export interface ChatMessage {
     sha256: string;
   };
   isSelf: boolean;
+  isEdited?: boolean;
+  editedAt?: number;
 }
 
 export interface FileTransferRecord {

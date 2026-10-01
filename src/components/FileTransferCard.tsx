@@ -13,9 +13,12 @@ import {
 } from 'lucide-react';
 import { FileTransferRecord } from '../types/index.ts';
 
+import { MediaPreviewItem } from './MediaLightboxModal.tsx';
+
 interface FileTransferCardProps {
   transfer: FileTransferRecord;
   onCancel?: (transferId: string) => void;
+  onPreview?: (item: MediaPreviewItem) => void;
 }
 
 export function formatBytes(bytes: number, decimals = 1): string {
@@ -34,7 +37,7 @@ export function formatSeconds(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export const FileTransferCard: React.FC<FileTransferCardProps> = ({ transfer, onCancel }) => {
+export const FileTransferCard: React.FC<FileTransferCardProps> = ({ transfer, onCancel, onPreview }) => {
   const isImage = transfer.mimeType.startsWith('image/');
   const isVideo = transfer.mimeType.startsWith('video/');
   const isAudio = transfer.mimeType.startsWith('audio/');
@@ -150,16 +153,37 @@ export const FileTransferCard: React.FC<FileTransferCardProps> = ({ transfer, on
               <span>Transfer complete</span>
             </div>
 
-            {transfer.blobUrl && (
-              <a
-                href={transfer.blobUrl}
-                download={transfer.fileName}
-                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-neutral-900 bg-neutral-100 hover:bg-white rounded transition-colors"
-              >
-                <Download className="h-3.5 w-3.5" />
-                <span>Save</span>
-              </a>
-            )}
+            <div className="flex items-center gap-1.5">
+              {transfer.blobUrl && onPreview && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onPreview({
+                      id: transfer.transferId,
+                      name: transfer.fileName,
+                      mimeType: transfer.mimeType,
+                      size: transfer.fileSize,
+                      url: transfer.blobUrl!,
+                    })
+                  }
+                  title="Fullscreen In-App Preview"
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 hover:bg-cyan-900/60 rounded transition cursor-pointer"
+                >
+                  <span>Preview</span>
+                </button>
+              )}
+
+              {transfer.blobUrl && (
+                <a
+                  href={transfer.blobUrl}
+                  download={transfer.fileName}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-neutral-900 bg-neutral-100 hover:bg-white rounded transition-colors"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Save</span>
+                </a>
+              )}
+            </div>
           </div>
 
           <div className="mt-1 text-[10px] font-mono text-neutral-500 truncate" title={`SHA-256: ${transfer.sha256Checksum}`}>

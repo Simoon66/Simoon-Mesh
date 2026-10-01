@@ -13,9 +13,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   Cpu,
+  Users,
 } from 'lucide-react';
 import { SimoonIdentity, TransportState } from '../types/index.ts';
 import { getSignalingUrl } from '../config.ts';
+import { contactManager, Contact } from '../core/contacts/ContactManager.ts';
 
 interface ConnectViewProps {
   myIdentity: SimoonIdentity;
@@ -65,8 +67,17 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
   const [airgapToken, setAirgapToken] = useState('');
   const [airgapInputToken, setAirgapInputToken] = useState('');
   const [copiedAirgap, setCopiedAirgap] = useState(false);
+  const [contacts, setContacts] = useState<Contact[]>([]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    setContacts(contactManager.getAll());
+    const unsub = contactManager.subscribe(() => {
+      setContacts(contactManager.getAll());
+    });
+    return unsub;
+  }, []);
 
   // Generate QR Code on mount or identity/session change
   useEffect(() => {
@@ -402,6 +413,32 @@ export const ConnectView: React.FC<ConnectViewProps> = ({
                   </button>
                 </div>
               </form>
+
+              {/* Quick Connect from Saved Contacts */}
+              {contacts.length > 0 && (
+                <div className="space-y-1.5 pt-2">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-semibold flex items-center gap-1">
+                    <Users className="w-3 h-3" />
+                    <span>Saved Contacts ({contacts.length})</span>
+                  </span>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                    {contacts.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setPeerInput(c.id);
+                          onConnect(c.id);
+                        }}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-800/80 hover:bg-cyan-950/60 border border-neutral-700 hover:border-cyan-500/50 text-xs text-neutral-200 hover:text-cyan-300 transition cursor-pointer"
+                      >
+                        <span className="font-semibold">{c.alias}</span>
+                        <span className="text-[10px] font-mono text-neutral-400">({c.id.slice(0, 4)})</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

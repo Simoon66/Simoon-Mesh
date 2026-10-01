@@ -242,7 +242,12 @@ This ensures direct URL navigation (including shareable direct-connect links lik
 - [x] **v0.1 — Web P2P Prototype & Protocol Foundation**
   - Local cryptographic identities (ECDH/ECDSA P-256)
   - AES-GCM 256-bit E2EE
-  - WebRTC DataChannel transport
+  - WebRTC DataChannel transport with Public WebSocket relay fallback
+  - Contact management & address book with custom aliases and verification
+  - Message editing with instant peer sync and `(edited)` badge
+  - Message unsend (permanently removes message for both participants)
+  - In-app media lightbox: Fullscreen image viewer (zoom/pan/rotate), HTML5 video player, audio player, and document inspector
+  - Dual notification system: Web Push desktop notifications + offline synthesized Web Audio chimes
   - 32KB binary chunked file transfer with SHA-256 verification
   - Persistent IndexedDB message and file storage
   - Live diagnostics & telemetry console

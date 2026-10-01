@@ -5,12 +5,16 @@ import { ProtocolEngine, ProtocolEnvelope } from './messaging/protocol.ts';
 import { FileTransferManager } from './files/fileTransfer.ts';
 import { localDB } from './storage/db.ts';
 import { getSignalingUrl } from '../config.ts';
+import { contactManager } from './contacts/ContactManager.ts';
+import { notificationService } from '../utils/notifications.ts';
 
 export type SimoonMeshEvent =
   | { type: 'STATE_CHANGED'; state: TransportState }
   | { type: 'PEER_CONNECTED'; peer: SimoonIdentity }
   | { type: 'PEER_DISCONNECTED' }
   | { type: 'MESSAGE_RECEIVED'; message: ChatMessage }
+  | { type: 'MESSAGE_EDITED'; messageId: string; newText: string; editedAt: number }
+  | { type: 'MESSAGE_UNSENT'; messageId: string }
   | { type: 'TRANSFER_UPDATED'; transfer: FileTransferRecord }
   | { type: 'STATS_UPDATED'; stats: TransportStats }
   | { type: 'LOG_ENTRY'; log: ProtocolLogEntry };
@@ -88,6 +92,10 @@ export class SimoonMeshClient {
           }
         }
       } else if (state === 'disconnected' || state === 'failed') {
+        const prevId = this.connectedPeer?.id;
+        if (prevId) {
+          notificationService.notifyPeerDisconnected(prevId);
+        }
         this.connectedPeer = null;
         this.protocol.resetSession();
         this.emit({ type: 'PEER_DISCONNECTED' });
@@ -156,7 +164,8 @@ export class SimoonMeshClient {
           this.connectedPeer = this.protocol.remotePeer;
           this.log('system', 'CRYPTO', `E2EE established! AES-GCM 256 session key active.`);
 
-          // Save contact
+          // Update contact last seen
+          contactManager.updateLastConnected(this.connectedPeer.id);
           await localDB.saveContact({
             peerId: this.connectedPeer.id,
             ecdhPublicKeyJwk: this.connectedPeer.ecdhPublicKeyJwk,
@@ -170,6 +179,8 @@ export class SimoonMeshClient {
           const ackJson = await this.protocol.createHandshakeAckEnvelope(envelope.senderId);
           await this.transport.send(ackJson);
 
+          const contact = contactManager.get(this.connectedPeer.id);
+          notificationService.notifyPeerConnected(this.connectedPeer.id, contact?.alias);
           this.emit({ type: 'PEER_CONNECTED', peer: this.connectedPeer });
         }
         return;
@@ -182,6 +193,7 @@ export class SimoonMeshClient {
           this.connectedPeer = this.protocol.remotePeer;
           this.log('system', 'CRYPTO', `E2EE mutual verification verified! AES-GCM 256 ready.`);
 
+          contactManager.updateLastConnected(this.connectedPeer.id);
           await localDB.saveContact({
             peerId: this.connectedPeer.id,
             ecdhPublicKeyJwk: this.connectedPeer.ecdhPublicKeyJwk,
@@ -191,6 +203,8 @@ export class SimoonMeshClient {
             messagesCount: 0,
           });
 
+          const contact = contactManager.get(this.connectedPeer.id);
+          notificationService.notifyPeerConnected(this.connectedPeer.id, contact?.alias);
           this.emit({ type: 'PEER_CONNECTED', peer: this.connectedPeer });
         }
         return;
@@ -201,8 +215,9 @@ export class SimoonMeshClient {
       this.log('in', 'PROTOCOL', `Decrypted message: ${type}`);
 
       if (type === 'TEXT') {
+        const msgId = payloadData.messageId || envelope.id;
         const chatMsg: ChatMessage = {
-          id: envelope.id,
+          id: msgId,
           conversationId: envelope.senderId,
           senderId: envelope.senderId,
           recipientId: this.identity.id,
@@ -214,6 +229,21 @@ export class SimoonMeshClient {
         };
         await localDB.saveMessage(chatMsg);
         this.emit({ type: 'MESSAGE_RECEIVED', message: chatMsg });
+
+        // Trigger notification
+        const contact = contactManager.get(envelope.senderId);
+        const senderName = contact?.alias || `Peer ${envelope.senderId.slice(0, 4)}`;
+        notificationService.notifyIncoming(senderName, payloadData.text || 'Sent a message');
+      } else if (type === 'EDIT_TEXT') {
+        const { messageId, newText, editedAt } = payloadData;
+        await localDB.updateMessageText(messageId, newText, editedAt);
+        this.emit({ type: 'MESSAGE_EDITED', messageId, newText, editedAt });
+        this.log('in', 'PROTOCOL', `Peer edited message ${messageId}`);
+      } else if (type === 'UNSEND_MESSAGE') {
+        const { messageId } = payloadData;
+        await localDB.deleteMessage(messageId);
+        this.emit({ type: 'MESSAGE_UNSENT', messageId });
+        this.log('in', 'PROTOCOL', `Peer unsent message ${messageId}`);
       } else if (type === 'FILE_OFFER') {
         this.log('in', 'FILE', `Incoming file offer: ${payloadData.name} (${payloadData.size} bytes)`);
         const transfer = this.fileManager.handleFileOffer(payloadData);
@@ -237,6 +267,10 @@ export class SimoonMeshClient {
         };
         await localDB.saveMessage(chatMsg);
         this.emit({ type: 'MESSAGE_RECEIVED', message: chatMsg });
+
+        const contact = contactManager.get(envelope.senderId);
+        const senderName = contact?.alias || `Peer ${envelope.senderId.slice(0, 4)}`;
+        notificationService.notifyIncoming(senderName, `Sent file: ${transfer.fileName}`);
       } else if (type === 'FILE_ACCEPT') {
         this.log('in', 'FILE', `Peer accepted file transfer ${payloadData.transferId}. Starting streaming...`);
         this.fileManager.startStreamingFileChunks(payloadData.transferId).catch(console.error);
@@ -279,12 +313,57 @@ export class SimoonMeshClient {
     const envelopeJson = await this.protocol.createEncryptedEnvelope(
       'TEXT',
       this.connectedPeer.id,
-      { text }
+      { messageId, text }
     );
     await this.transport.send(envelopeJson);
 
     this.emit({ type: 'MESSAGE_RECEIVED', message: chatMsg });
     return chatMsg;
+  }
+
+  /**
+   * Edit a text message and sync with remote peer if connected
+   */
+  async editText(messageId: string, newText: string): Promise<void> {
+    const editedAt = Date.now();
+    await localDB.updateMessageText(messageId, newText, editedAt);
+    this.emit({ type: 'MESSAGE_EDITED', messageId, newText, editedAt });
+
+    // Send encrypted frame to peer if connected
+    if (this.connectedPeer && this.connectionState === 'connected' && this.protocol.isEncryptedSessionReady) {
+      try {
+        const envelopeJson = await this.protocol.createEncryptedEnvelope(
+          'EDIT_TEXT',
+          this.connectedPeer.id,
+          { messageId, newText, editedAt }
+        );
+        await this.transport.send(envelopeJson);
+      } catch (err) {
+        console.warn('[SIMOON] Could not transmit message edit to peer over WebRTC:', err);
+      }
+    }
+  }
+
+  /**
+   * Unsend / Delete a message: deletes completely from local database and syncs with remote peer if connected
+   */
+  async unsendMessage(messageId: string): Promise<void> {
+    await localDB.deleteMessage(messageId);
+    this.emit({ type: 'MESSAGE_UNSENT', messageId });
+
+    // Send encrypted unsend frame to peer if connected
+    if (this.connectedPeer && this.connectionState === 'connected' && this.protocol.isEncryptedSessionReady) {
+      try {
+        const envelopeJson = await this.protocol.createEncryptedEnvelope(
+          'UNSEND_MESSAGE',
+          this.connectedPeer.id,
+          { messageId }
+        );
+        await this.transport.send(envelopeJson);
+      } catch (err) {
+        console.warn('[SIMOON] Could not transmit message unsend to peer over WebRTC:', err);
+      }
+    }
   }
 
   /**
@@ -435,9 +514,13 @@ export class SimoonMeshClient {
    */
   async disconnect(): Promise<void> {
     this.log('system', 'TRANSPORT', 'Disconnecting peer transport...');
+    const prevId = this.connectedPeer?.id;
     await this.transport.disconnect();
     this.connectedPeer = null;
     this.protocol.resetSession();
+    if (prevId) {
+      notificationService.notifyPeerDisconnected(prevId);
+    }
     this.emit({ type: 'PEER_DISCONNECTED' });
   }
 

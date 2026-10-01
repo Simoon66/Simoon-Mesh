@@ -13,6 +13,8 @@ export type ProtocolMessageType =
   | 'HANDSHAKE'
   | 'HANDSHAKE_ACK'
   | 'TEXT'
+  | 'EDIT_TEXT'
+  | 'UNSEND_MESSAGE'
   | 'FILE_OFFER'
   | 'FILE_ACCEPT'
   | 'FILE_REJECT'

@@ -1,5 +1,4 @@
-import React from 'react';
-import { Activity, Shield, Wifi, WifiOff } from 'lucide-react';
+import { Activity, Shield, Wifi, WifiOff, Users } from 'lucide-react';
 import { TransportState } from '../types/index.ts';
 
 interface HeaderProps {
@@ -9,6 +8,7 @@ interface HeaderProps {
   connectedPeerId: string | null;
   showDiagnostics: boolean;
   onToggleDiagnostics: () => void;
+  onOpenContacts?: () => void;
   myId: string;
 }
 
@@ -19,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   connectedPeerId,
   showDiagnostics,
   onToggleDiagnostics,
+  onOpenContacts,
   myId,
 }) => {
   const isConnected = connectionState === 'connected';
@@ -84,6 +85,15 @@ export const Header: React.FC<HeaderProps> = ({
           >
             Security
           </button>
+          {onOpenContacts && (
+            <button
+              onClick={onOpenContacts}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap text-neutral-400 hover:text-cyan-300 hover:bg-neutral-900 cursor-pointer"
+            >
+              <Users className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Contacts</span>
+            </button>
+          )}
         </nav>
 
         {/* Zone 3: Connection & Diagnostic Actions */}

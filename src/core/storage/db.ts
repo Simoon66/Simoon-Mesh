@@ -73,6 +73,48 @@ class SimoonDatabase {
     });
   }
 
+  async deleteMessage(id: string): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.MESSAGES, 'readwrite');
+      const store = tx.objectStore(STORES.MESSAGES);
+      const req = store.delete(id);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async clearMessages(): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.MESSAGES, 'readwrite');
+      const store = tx.objectStore(STORES.MESSAGES);
+      const req = store.clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async updateMessageText(id: string, newText: string, editedAt: number): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.MESSAGES, 'readwrite');
+      const store = tx.objectStore(STORES.MESSAGES);
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const msg: ChatMessage = getReq.result;
+        if (msg) {
+          msg.text = newText;
+          msg.isEdited = true;
+          msg.editedAt = editedAt;
+          store.put(msg);
+        }
+        resolve();
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }
+
   // --- Transfers ---
   async saveTransfer(transfer: FileTransferRecord): Promise<void> {
     const db = await this.getDB();
