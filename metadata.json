@@ -1,0 +1,6 @@
+{
+  "name": "SIMOON MESH — Human × AI",
+  "description": "Privacy-first peer-to-peer encrypted communication protocol and messenger without cloud accounts, phone numbers, or servers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
