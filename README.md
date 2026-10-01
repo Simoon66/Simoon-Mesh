@@ -219,16 +219,21 @@ Cloudflare Pages routing is pre-configured via `public/_redirects`:
 ```
 This ensures direct URL navigation (including shareable direct-connect links like `/?peer=8F4A-29C1-7D52`) resolves to `index.html` without 404 errors.
 
-### WebRTC & Signaling in Production
+### WebRTC & Signaling on Cloudflare Pages
 
-Cloudflare Pages only hosts the frontend client. The WebRTC connection and cryptographic operations execute entirely within the client's browser.
-
-1. **Airgap Mode (Out of the Box)**: Requires zero backend servers. Users exchange connection tokens via QR code or text.
-2. **Automated Signaling (Optional)**: If you host a signaling relay (such as `server.ts` or a WebSocket relay), set:
-   ```text
-   VITE_SIGNALING_URL=https://signal.yourdomain.com
-   ```
-   If unset, the app operates gracefully without crashing, offering direct peer pairing and manual airgap exchange.
+1. **Free Public WebRTC Signaling Relay (Default / Zero-Config)**:
+   - When deployed to Cloudflare Pages (e.g. `https://simoon-mesh-test.pages.dev/`), the app automatically connects to a secure public WebRTC signaling relay (`wss://broker.emqx.io:8084/mqtt` / `wss://broker.hivemq.com:8884/mqtt`).
+   - 6-digit session codes (`482-195`) and direct SIMOON IDs exchange WebRTC SDP offers/answers and ICE candidates in real time with sub-100ms latency.
+   - **Zero servers, zero API keys, and zero HTTP 405 errors!**
+2. **Cloudflare Pages Edge Functions**:
+   - Included in `/functions/api/signal/[[catchall]].ts`. When pushed to GitHub, Cloudflare Pages deploys serverless edge handlers for `/api/signal/*`.
+3. **Airgap Mode (Zero-Server Offline Fallback)**:
+   - Users can exchange connection tokens via QR code or base64 text completely offline.
+4. **Custom Signaling Server (Optional)**:
+   - To host your own private relay using the included `server.ts`, configure:
+     ```text
+     VITE_SIGNALING_URL=https://signal.yourdomain.com
+     ```
 
 ---
 

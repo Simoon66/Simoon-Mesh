@@ -334,45 +334,76 @@ export class SimoonMeshClient {
 
   /**
    * Create a 6-digit pairing session code (e.g. 482-195)
+   * Works on both full-stack servers and static hosting via the Public WebRTC Relay!
    */
   async createPairingSession(): Promise<string> {
-    const baseUrl = getSignalingUrl();
-    const res = await fetch(`${baseUrl}/api/signal/session/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hostPeerId: this.identity.id }),
-    });
+    // Generate random 6-digit formatted code
+    const raw = Math.floor(100000 + Math.random() * 900000).toString();
+    const localCode = `${raw.slice(0, 3)}-${raw.slice(3, 6)}`;
 
-    if (!res.ok) {
-      throw new Error(`Failed to create pairing session: HTTP ${res.status}`);
+    // 1. Immediately subscribe host to the session topic on Public Relay
+    this.transport.publicRelay.listenToSession(localCode);
+
+    // 2. Dual-homed: Attempt server-side registration if available, but gracefully fallback
+    try {
+      const baseUrl = getSignalingUrl();
+      const res = await fetch(`${baseUrl}/api/signal/session/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostPeerId: this.identity.id }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.code) {
+          this.transport.publicRelay.listenToSession(data.code);
+          this.log('system', 'TRANSPORT', `Pairing session created: ${data.code}. Waiting for peer to connect...`);
+          return data.code;
+        }
+      }
+    } catch (e) {
+      // Ignore 405/network error on static hosts
     }
 
-    const data = await res.json();
-    this.log('system', 'TRANSPORT', `Pairing session created: ${data.code}. Ready for peer connection.`);
-    return data.code;
+    this.log('system', 'TRANSPORT', `Pairing session created: ${localCode} (via Public WebRTC Relay). Waiting for peer to connect...`);
+    return localCode;
   }
 
   /**
    * Join an existing pairing session by 6-digit code
+   * Works on both full-stack servers and static hosting via the Public WebRTC Relay!
    */
   async joinPairingSession(code: string): Promise<string> {
-    const baseUrl = getSignalingUrl();
-    const res = await fetch(`${baseUrl}/api/signal/session/join`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, guestPeerId: this.identity.id }),
-    });
+    const cleanCode = code.trim().replace(/\s+/g, '');
+    const formatted = cleanCode.includes('-') ? cleanCode : `${cleanCode.slice(0, 3)}-${cleanCode.slice(3, 6)}`;
 
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || `Failed to join session: HTTP ${res.status}`);
+    this.log('system', 'TRANSPORT', `Joining session ${formatted} via Public WebRTC Relay...`);
+
+    // 1. Announce join on Public Relay
+    await this.transport.publicRelay.announceJoinSession(formatted);
+
+    // 2. Dual-homed: Also notify REST backend if available
+    try {
+      const baseUrl = getSignalingUrl();
+      const res = await fetch(`${baseUrl}/api/signal/session/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: formatted, guestPeerId: this.identity.id }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.hostPeerId) {
+          this.log('system', 'TRANSPORT', `Host resolved: ${data.hostPeerId}. Initiating WebRTC...`);
+          await this.connectToPeer(data.hostPeerId);
+          return data.hostPeerId;
+        }
+      }
+    } catch (e) {
+      // Ignore 405 on static CDN
     }
 
-    const data = await res.json();
-    this.log('system', 'TRANSPORT', `Joined session ${data.code}. Host is ${data.hostPeerId}. Initiating WebRTC...`);
-    // Connect directly to host
-    await this.connectToPeer(data.hostPeerId);
-    return data.hostPeerId;
+    return formatted;
   }
 
   /**
