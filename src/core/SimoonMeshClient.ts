@@ -15,6 +15,7 @@ export type SimoonMeshEvent =
   | { type: 'MESSAGE_RECEIVED'; message: ChatMessage }
   | { type: 'MESSAGE_EDITED'; messageId: string; newText: string; editedAt: number }
   | { type: 'MESSAGE_UNSENT'; messageId: string }
+  | { type: 'TYPING_STATUS'; peerId: string; isTyping: boolean }
   | { type: 'TRANSFER_UPDATED'; transfer: FileTransferRecord }
   | { type: 'STATS_UPDATED'; stats: TransportStats }
   | { type: 'LOG_ENTRY'; log: ProtocolLogEntry };
@@ -244,6 +245,13 @@ export class SimoonMeshClient {
         await localDB.deleteMessage(messageId);
         this.emit({ type: 'MESSAGE_UNSENT', messageId });
         this.log('in', 'PROTOCOL', `Peer unsent message ${messageId}`);
+      } else if (type === 'TYPING_STATUS') {
+        const isTyping = Boolean(payloadData?.isTyping);
+        this.emit({
+          type: 'TYPING_STATUS',
+          peerId: envelope.senderId,
+          isTyping,
+        });
       } else if (type === 'FILE_OFFER') {
         this.log('in', 'FILE', `Incoming file offer: ${payloadData.name} (${payloadData.size} bytes)`);
         const transfer = this.fileManager.handleFileOffer(payloadData);
@@ -345,9 +353,36 @@ export class SimoonMeshClient {
   }
 
   /**
-   * Unsend / Delete a message: deletes completely from local database and syncs with remote peer if connected
+   * Send real-time typing status over E2EE WebRTC channel
    */
-  async unsendMessage(messageId: string): Promise<void> {
+  async sendTypingStatus(isTyping: boolean): Promise<void> {
+    if (!this.connectedPeer || this.connectionState !== 'connected' || !this.protocol.isEncryptedSessionReady) {
+      return;
+    }
+    try {
+      const envelopeJson = await this.protocol.createEncryptedEnvelope(
+        'TYPING_STATUS',
+        this.connectedPeer.id,
+        { isTyping }
+      );
+      await this.transport.send(envelopeJson);
+    } catch {
+      // Non-critical: ignore typing status delivery failure
+    }
+  }
+
+  /**
+   * Delete message for me: removes from local IndexedDB only (does not delete for peer)
+   */
+  async deleteMessageForMe(messageId: string): Promise<void> {
+    await localDB.deleteMessage(messageId);
+    this.emit({ type: 'MESSAGE_UNSENT', messageId });
+  }
+
+  /**
+   * Delete message for everyone (Unsend): removes from local database AND sends encrypted unsend frame to remote peer
+   */
+  async deleteMessageForEveryone(messageId: string): Promise<void> {
     await localDB.deleteMessage(messageId);
     this.emit({ type: 'MESSAGE_UNSENT', messageId });
 
@@ -360,10 +395,18 @@ export class SimoonMeshClient {
           { messageId }
         );
         await this.transport.send(envelopeJson);
+        this.log('out', 'PROTOCOL', `Sent unsend packet for ${messageId}`);
       } catch (err) {
         console.warn('[SIMOON] Could not transmit message unsend to peer over WebRTC:', err);
       }
     }
+  }
+
+  /**
+   * Alias for deleteMessageForEveryone
+   */
+  async unsendMessage(messageId: string): Promise<void> {
+    return this.deleteMessageForEveryone(messageId);
   }
 
   /**

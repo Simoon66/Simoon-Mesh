@@ -48,6 +48,7 @@ export default function App() {
     lastActiveTimestamp: Date.now(),
   });
   const [logs, setLogs] = useState<ProtocolLogEntry[]>([]);
+  const [isPeerTyping, setIsPeerTyping] = useState<boolean>(false);
 
   // Initialize client on mount
   useEffect(() => {
@@ -81,7 +82,11 @@ export default function App() {
           } else if (event.type === 'PEER_DISCONNECTED') {
             setConnectedPeer(null);
             setConnectionState('disconnected');
+            setIsPeerTyping(false);
+          } else if (event.type === 'TYPING_STATUS') {
+            setIsPeerTyping(event.isTyping);
           } else if (event.type === 'MESSAGE_RECEIVED') {
+            setIsPeerTyping(false);
             setMessages(prev => {
               // Avoid duplicate messages
               if (prev.some(m => m.id === event.message.id)) {
@@ -167,9 +172,18 @@ export default function App() {
     await simoonClient.editText(messageId, newText);
   };
 
-  const handleUnsendMessage = async (messageId: string) => {
+  const handleDeleteMessageForMe = async (messageId: string) => {
     setMessages(prev => prev.filter(m => m.id !== messageId));
-    await simoonClient.unsendMessage(messageId);
+    await simoonClient.deleteMessageForMe(messageId);
+  };
+
+  const handleDeleteMessageForEveryone = async (messageId: string) => {
+    setMessages(prev => prev.filter(m => m.id !== messageId));
+    await simoonClient.deleteMessageForEveryone(messageId);
+  };
+
+  const handleSendTypingStatus = (isTyping: boolean) => {
+    simoonClient.sendTypingStatus(isTyping).catch(() => {});
   };
 
   const handleClearChat = async () => {
@@ -255,9 +269,12 @@ export default function App() {
             transfers={transfers}
             connectedPeer={connectedPeer}
             connectionState={connectionState}
+            isPeerTyping={isPeerTyping}
+            onSendTypingStatus={handleSendTypingStatus}
             onSendMessage={handleSendMessage}
             onEditMessage={handleEditMessage}
-            onUnsendMessage={handleUnsendMessage}
+            onDeleteMessageForMe={handleDeleteMessageForMe}
+            onDeleteMessageForEveryone={handleDeleteMessageForEveryone}
             onSendFile={handleSendFile}
             onCancelTransfer={handleCancelTransfer}
             onNavigateToConnect={() => setActiveTab('connect')}

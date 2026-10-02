@@ -15,6 +15,7 @@ export type ProtocolMessageType =
   | 'TEXT'
   | 'EDIT_TEXT'
   | 'UNSEND_MESSAGE'
+  | 'TYPING_STATUS'
   | 'FILE_OFFER'
   | 'FILE_ACCEPT'
   | 'FILE_REJECT'

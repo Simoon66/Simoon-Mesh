@@ -1,13 +1,20 @@
 import { ChatMessage, FileTransferRecord, PeerContact } from '../../types/index.ts';
 
 const DB_NAME = 'simoon_mesh_local_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
   MESSAGES: 'messages',
   TRANSFERS: 'transfers',
   CONTACTS: 'contacts',
+  DRAFTS: 'drafts',
 };
+
+export interface StoredDraft {
+  conversationId: string;
+  draftText: string;
+  updatedAt: number;
+}
 
 class SimoonDatabase {
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -29,6 +36,9 @@ class SimoonDatabase {
           }
           if (!db.objectStoreNames.contains(STORES.CONTACTS)) {
             db.createObjectStore(STORES.CONTACTS, { keyPath: 'peerId' });
+          }
+          if (!db.objectStoreNames.contains(STORES.DRAFTS)) {
+            db.createObjectStore(STORES.DRAFTS, { keyPath: 'conversationId' });
           }
         };
         req.onsuccess = () => resolve(req.result);
@@ -101,33 +111,97 @@ class SimoonDatabase {
       const tx = db.transaction(STORES.MESSAGES, 'readwrite');
       const store = tx.objectStore(STORES.MESSAGES);
       const getReq = store.get(id);
+
       getReq.onsuccess = () => {
         const msg: ChatMessage = getReq.result;
         if (msg) {
           msg.text = newText;
           msg.isEdited = true;
           msg.editedAt = editedAt;
-          store.put(msg);
+          const putReq = store.put(msg);
+          putReq.onsuccess = () => resolve();
+          putReq.onerror = () => reject(putReq.error);
+        } else {
+          resolve();
         }
-        resolve();
       };
       getReq.onerror = () => reject(getReq.error);
     });
   }
 
-  // --- Transfers ---
-  async saveTransfer(transfer: FileTransferRecord): Promise<void> {
-    const db = await this.getDB();
-    // Exclude raw File / Blob from indexedDB storage to avoid quota issues on huge files
-    const cleanRecord: FileTransferRecord = {
-      ...transfer,
-      fileData: undefined,
-    };
+  // --- Drafts (Automatic IndexedDB persistence when navigating / switching tabs) ---
+  async saveDraft(conversationId: string, draftText: string): Promise<void> {
+    // Also save to localStorage as fast sync backup
+    try {
+      if (!draftText.trim()) {
+        localStorage.removeItem(`simoon_draft_${conversationId}`);
+      } else {
+        localStorage.setItem(`simoon_draft_${conversationId}`, draftText);
+      }
+    } catch {}
 
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.DRAFTS, 'readwrite');
+      const store = tx.objectStore(STORES.DRAFTS);
+      if (!draftText.trim()) {
+        const req = store.delete(conversationId);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      } else {
+        const req = store.put({
+          conversationId,
+          draftText,
+          updatedAt: Date.now(),
+        });
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      }
+    });
+  }
+
+  async getDraft(conversationId: string): Promise<string> {
+    try {
+      const local = localStorage.getItem(`simoon_draft_${conversationId}`);
+      if (local !== null) return local;
+    } catch {}
+
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.DRAFTS, 'readonly');
+      const store = tx.objectStore(STORES.DRAFTS);
+      const req = store.get(conversationId);
+      req.onsuccess = () => {
+        const res: StoredDraft = req.result;
+        resolve(res ? res.draftText : '');
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async clearDraft(conversationId: string): Promise<void> {
+    try {
+      localStorage.removeItem(`simoon_draft_${conversationId}`);
+    } catch {}
+
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.DRAFTS, 'readwrite');
+      const store = tx.objectStore(STORES.DRAFTS);
+      const req = store.delete(conversationId);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // --- Transfers ---
+  async saveTransfer(record: FileTransferRecord): Promise<void> {
+    const db = await this.getDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORES.TRANSFERS, 'readwrite');
       const store = tx.objectStore(STORES.TRANSFERS);
-      const req = store.put(cleanRecord);
+      const toSave = { ...record, fileData: undefined };
+      const req = store.put(toSave);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
@@ -139,11 +213,7 @@ class SimoonDatabase {
       const tx = db.transaction(STORES.TRANSFERS, 'readonly');
       const store = tx.objectStore(STORES.TRANSFERS);
       const req = store.getAll();
-      req.onsuccess = () => {
-        const list: FileTransferRecord[] = req.result || [];
-        list.sort((a, b) => b.startTime - a.startTime);
-        resolve(list);
-      };
+      req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => reject(req.error);
     });
   }
@@ -175,10 +245,11 @@ class SimoonDatabase {
   async clearAll(): Promise<void> {
     const db = await this.getDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction([STORES.MESSAGES, STORES.TRANSFERS, STORES.CONTACTS], 'readwrite');
+      const tx = db.transaction([STORES.MESSAGES, STORES.TRANSFERS, STORES.CONTACTS, STORES.DRAFTS], 'readwrite');
       tx.objectStore(STORES.MESSAGES).clear();
       tx.objectStore(STORES.TRANSFERS).clear();
       tx.objectStore(STORES.CONTACTS).clear();
+      tx.objectStore(STORES.DRAFTS).clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });

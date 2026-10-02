@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send,
   Paperclip,
@@ -18,6 +18,8 @@ import {
   ShieldCheck,
   Copy,
   Eraser,
+  Globe,
+  UserCheck,
 } from 'lucide-react';
 import {
   ChatMessage,
@@ -29,15 +31,19 @@ import { FileTransferCard } from './FileTransferCard.tsx';
 import { MediaLightboxModal, MediaPreviewItem } from './MediaLightboxModal.tsx';
 import { contactManager, Contact } from '../core/contacts/ContactManager.ts';
 import { notificationService } from '../utils/notifications.ts';
+import { localDB } from '../core/storage/db.ts';
 
 interface ChatViewProps {
   messages: ChatMessage[];
   transfers: Map<string, FileTransferRecord>;
   connectedPeer: SimoonIdentity | null;
   connectionState: TransportState;
+  isPeerTyping?: boolean;
+  onSendTypingStatus?: (isTyping: boolean) => void;
   onSendMessage: (text: string) => Promise<void>;
   onEditMessage: (messageId: string, newText: string) => Promise<void>;
-  onUnsendMessage: (messageId: string) => Promise<void>;
+  onDeleteMessageForMe: (messageId: string) => Promise<void>;
+  onDeleteMessageForEveryone: (messageId: string) => Promise<void>;
   onSendFile: (file: File) => Promise<void>;
   onCancelTransfer: (transferId: string) => void;
   onNavigateToConnect: () => void;
@@ -50,9 +56,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   transfers,
   connectedPeer,
   connectionState,
+  isPeerTyping = false,
+  onSendTypingStatus,
   onSendMessage,
   onEditMessage,
-  onUnsendMessage,
+  onDeleteMessageForMe,
+  onDeleteMessageForEveryone,
   onSendFile,
   onCancelTransfer,
   onNavigateToConnect,
@@ -66,6 +75,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Edit message state
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editTextValue, setEditTextValue] = useState('');
+
+  // Delete option popover for messages
+  const [deleteMenuMsgId, setDeleteMenuMsgId] = useState<string | null>(null);
 
   // Media preview lightbox state
   const [previewItem, setPreviewItem] = useState<MediaPreviewItem | null>(null);
@@ -82,6 +94,47 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTypingLocalRef = useRef<boolean>(false);
+  const inputTextRef = useRef<string>('');
+
+  // Keep inputTextRef synced for visibilitychange handlers
+  useEffect(() => {
+    inputTextRef.current = inputText;
+  }, [inputText]);
+
+  const convId = connectedPeer ? connectedPeer.id : 'global_draft';
+
+  // --- Draft Persistence in IndexedDB on load and tab switch ---
+  useEffect(() => {
+    let isCancelled = false;
+    localDB.getDraft(convId).then((draft) => {
+      if (!isCancelled && draft) {
+        setInputText(draft);
+      }
+    });
+
+    // Save draft when user switches tabs (visibilitychange) or unloads window
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        localDB.saveDraft(convId, inputTextRef.current);
+      }
+    };
+
+    const handleBeforeUnload = () => {
+      localDB.saveDraft(convId, inputTextRef.current);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      isCancelled = true;
+      localDB.saveDraft(convId, inputTextRef.current);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [convId]);
 
   // Sync contact info
   useEffect(() => {
@@ -107,10 +160,51 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   }, [editingMessageId]);
 
-  // Auto scroll to latest message
+  // Auto scroll to latest message or typing indicator
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, transfers]);
+  }, [messages, transfers, isPeerTyping]);
+
+  // Handle typing status notification
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setInputText(val);
+
+    // Save draft in IndexedDB with debounce
+    localDB.saveDraft(convId, val);
+
+    if (connectionState === 'connected' && onSendTypingStatus) {
+      if (val.trim().length > 0) {
+        if (!isTypingLocalRef.current) {
+          isTypingLocalRef.current = true;
+          onSendTypingStatus(true);
+        }
+
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+
+        typingTimeoutRef.current = setTimeout(() => {
+          isTypingLocalRef.current = false;
+          onSendTypingStatus(false);
+        }, 2200);
+      } else {
+        if (isTypingLocalRef.current) {
+          isTypingLocalRef.current = false;
+          onSendTypingStatus(false);
+        }
+      }
+    }
+  };
+
+  const handleInputBlur = () => {
+    // Save draft
+    localDB.saveDraft(convId, inputText);
+    if (isTypingLocalRef.current && onSendTypingStatus) {
+      isTypingLocalRef.current = false;
+      onSendTypingStatus(false);
+    }
+  };
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -120,6 +214,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
       setIsSending(true);
       const text = inputText;
       setInputText('');
+      await localDB.clearDraft(convId);
+
+      if (isTypingLocalRef.current && onSendTypingStatus) {
+        isTypingLocalRef.current = false;
+        onSendTypingStatus(false);
+      }
+
       await onSendMessage(text);
     } catch (err) {
       console.error('Failed to send message:', err);
@@ -131,6 +232,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const handleStartEdit = (msg: ChatMessage) => {
     setEditingMessageId(msg.id);
     setEditTextValue(msg.text || '');
+    setDeleteMenuMsgId(null);
   };
 
   const handleSaveEdit = async (msgId: string) => {
@@ -148,12 +250,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setEditTextValue('');
   };
 
-  // Direct instant message deletion
-  const handleDeleteMessage = async (msgId: string) => {
+  // --- Deletion Handlers ---
+  const handleExecuteDeleteForMe = async (msgId: string) => {
     try {
-      await onUnsendMessage(msgId);
+      await onDeleteMessageForMe(msgId);
+      setDeleteMenuMsgId(null);
     } catch (err) {
-      console.error('Failed to delete message:', err);
+      console.error('Failed to delete message for me:', err);
+    }
+  };
+
+  const handleExecuteDeleteForEveryone = async (msgId: string) => {
+    try {
+      await onDeleteMessageForEveryone(msgId);
+      setDeleteMenuMsgId(null);
+    } catch (err) {
+      console.error('Failed to delete message for everyone:', err);
     }
   };
 
@@ -316,9 +428,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     {connectedPeer.id}
                   </span>
                 </div>
-                <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">
-                  ECDH-P256 · AES-GCM 256 E2EE
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">
+                    ECDH-P256 · AES-GCM 256 E2EE
+                  </span>
+                  {isPeerTyping && (
+                    <span className="text-[10px] font-mono text-cyan-400 animate-pulse">
+                      typing...
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
@@ -327,7 +446,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <span className="text-xs text-neutral-400">
                 {connectionState === 'connecting'
                   ? 'Connecting to peer...'
-                  : 'Offline / Standby (Local Vault Active)'}
+                  : 'Offline / Standby (Drafts & Vault Active)'}
               </span>
             </div>
           )}
@@ -456,6 +575,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           });
           const isEditing = editingMessageId === msg.id;
           const isSelected = selectedMsgId === msg.id;
+          const isDeleteMenuOpen = deleteMenuMsgId === msg.id;
 
           return (
             <div
@@ -538,7 +658,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <div
                     onClick={e => e.stopPropagation()}
                     className={`absolute right-0 -top-3.5 ${
-                      isSelected ? 'flex' : 'hidden group-hover:flex'
+                      isSelected || isDeleteMenuOpen ? 'flex' : 'hidden group-hover:flex'
                     } items-center gap-1 bg-neutral-900/95 border border-neutral-700 rounded-full px-1.5 py-0.5 shadow-lg z-10`}
                   >
                     {/* Copy text */}
@@ -567,13 +687,65 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       </button>
                     )}
 
-                    {/* Delete / Remove / Unsend */}
+                    {/* Delete Toggle */}
                     <button
-                      onClick={() => handleDeleteMessage(msg.id)}
-                      title={isSelf ? 'Unsend / Delete message' : 'Delete message from history'}
+                      onClick={() => setDeleteMenuMsgId(isDeleteMenuOpen ? null : msg.id)}
+                      title={isSelf ? 'Delete / Unsend options' : 'Delete for me'}
                       className="p-1 rounded-full text-neutral-400 hover:text-rose-400 hover:bg-neutral-800 transition cursor-pointer"
                     >
                       <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+
+                {/* In-Bubble Delete Choices Popover */}
+                {isDeleteMenuOpen && (
+                  <div
+                    onClick={e => e.stopPropagation()}
+                    className={`absolute z-20 ${
+                      isSelf ? 'right-0 top-full mt-1.5' : 'left-0 top-full mt-1.5'
+                    } bg-neutral-900 border border-neutral-700/80 rounded-xl p-1.5 shadow-2xl flex flex-col gap-1 min-w-[190px] animate-fade-in`}
+                  >
+                    {isSelf ? (
+                      <>
+                        <button
+                          onClick={() => handleExecuteDeleteForMe(msg.id)}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-neutral-200 hover:bg-neutral-800 text-left transition cursor-pointer"
+                        >
+                          <UserCheck className="w-3.5 h-3.5 text-neutral-400" />
+                          <div className="flex flex-col">
+                            <span className="font-medium">Delete for me</span>
+                            <span className="text-[9px] text-neutral-500">Only removes on this device</span>
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleExecuteDeleteForEveryone(msg.id)}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-rose-300 hover:bg-rose-950/40 text-left transition cursor-pointer"
+                        >
+                          <Globe className="w-3.5 h-3.5 text-rose-400" />
+                          <div className="flex flex-col">
+                            <span className="font-medium">Delete for everyone</span>
+                            <span className="text-[9px] text-rose-400/70">Unsend for all participants</span>
+                          </div>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => handleExecuteDeleteForMe(msg.id)}
+                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-rose-300 hover:bg-rose-950/40 text-left transition cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                        <div className="flex flex-col">
+                          <span className="font-medium">Delete for me</span>
+                          <span className="text-[9px] text-neutral-500">Remove from my history</span>
+                        </div>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setDeleteMenuMsgId(null)}
+                      className="mt-0.5 px-2 py-1 text-[10px] text-neutral-400 hover:text-white rounded bg-neutral-800/60 hover:bg-neutral-800 text-center transition"
+                    >
+                      Cancel
                     </button>
                   </div>
                 )}
@@ -602,6 +774,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
           );
         })}
 
+        {/* Real-Time Peer Typing Indicator in Message Stream */}
+        {isPeerTyping && (
+          <div className="flex items-center gap-2 text-xs text-cyan-400/90 font-mono py-1 animate-fade-in">
+            <div className="flex items-center gap-2 bg-neutral-900/90 border border-neutral-800/80 rounded-2xl px-3.5 py-2 shadow-sm">
+              <span className="font-semibold text-xs text-neutral-300">
+                {activeContact ? activeContact.alias : connectedPeer ? `Peer ${connectedPeer.id.slice(0, 4)}` : 'Peer'}
+              </span>
+              <span className="text-neutral-500 text-xs">is typing</span>
+              <div className="flex items-center gap-1 ml-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
@@ -628,16 +817,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <Paperclip className="h-4 w-4" />
           </button>
 
-          {/* Text Input */}
+          {/* Text Input with Automatic Draft Persistence and Typing Broadcast */}
           <div className="relative flex-1">
             <input
               type="text"
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={handleInputChange}
+              onBlur={handleInputBlur}
               placeholder={
                 isConnected
                   ? 'Write an encrypted message...'
-                  : 'Connect to a peer to start messaging'
+                  : 'Connect to a peer to start messaging (Drafts saved automatically)'
               }
               disabled={!isConnected}
               className="w-full rounded-xl border border-neutral-800 bg-neutral-900/90 px-4 py-2.5 text-sm text-neutral-100 placeholder-neutral-500 focus:border-cyan-400 focus:outline-none disabled:opacity-40"
